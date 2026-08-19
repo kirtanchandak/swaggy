@@ -7,7 +7,7 @@ export async function GET() {
     return NextResponse.json({
       authenticated: isAuthenticated(session),
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ authenticated: false });
   }
 }

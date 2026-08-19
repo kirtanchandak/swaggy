@@ -4,7 +4,8 @@ import { useChat, Message } from 'ai/react';
 import { useEffect, useRef, useState, FormEvent, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, LogOut, Sparkles } from 'lucide-react';
+import Link from 'next/link';
+import { Send, LogOut, Sparkles, Home } from 'lucide-react';
 import { ChatMessage } from '@/components/ui/ChatMessage';
 
 const SUGGESTIONS = [
@@ -135,16 +136,23 @@ export default function ChatPage() {
     <div className="flex flex-col h-screen bg-bg relative selection:bg-swiggy-primary/30">
       {/* Premium Glass Header */}
       <header className="absolute top-0 w-full z-20 flex items-center justify-between px-6 py-4 glass-header">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-swiggy-primary to-swiggy-light flex items-center justify-center shadow-lg shadow-swiggy-primary/20">
+        <Link href="/" className="flex items-center gap-3 group">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-swiggy-primary to-swiggy-light flex items-center justify-center shadow-lg shadow-swiggy-primary/20 group-hover:scale-105 transition-transform">
             <span className="text-xl">🧡</span>
           </div>
           <span className="text-xl font-bold tracking-tight text-white">
             sw<span className="text-swiggy-primary">aggy</span>
           </span>
-        </div>
+        </Link>
         
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          <Link
+            href="/"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-white hover:bg-white/5 transition-all"
+          >
+            <Home className="w-3.5 h-3.5" />
+            <span>Home</span>
+          </Link>
           <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/10 border border-green-500/20">
             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
             <span className="text-xs font-medium text-green-400 tracking-wide">Connected</span>
@@ -178,7 +186,7 @@ export default function ChatPage() {
                 What are you craving?
               </h1>
               <p className="text-gray-400 text-lg max-w-md mx-auto leading-relaxed">
-                Tell me what you want to eat, your budget, or just say "I'm hungry" and I'll handle the rest.
+                Tell me what you want to eat, your budget, or just say &quot;I&apos;m hungry&quot; and I&apos;ll handle the rest.
               </p>
             </motion.div>
           )}
