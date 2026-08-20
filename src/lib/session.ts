@@ -12,6 +12,7 @@ export const sessionOptions = {
 };
 
 export interface SessionData {
+  userId?: string;
   swiggy?: {
     accessToken: string;
     expiresAt: number;
@@ -23,9 +24,17 @@ export interface SessionData {
   };
 }
 
+import { v4 as uuidv4 } from 'uuid';
+
 export async function getSession() {
   const cookieStore = await cookies();
   const session = await getIronSession<SessionData>(cookieStore, sessionOptions);
+  
+  if (!session.userId) {
+    session.userId = uuidv4();
+    await session.save();
+  }
+  
   return session;
 }
 

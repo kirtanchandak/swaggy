@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { streamText } from 'ai';
+import { streamText, tool } from 'ai';
+import { z } from 'zod';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createSwiggyFoodMcpClient } from '@/lib/mcp';
 import { getSession, isAuthenticated } from '@/lib/session';
+import { supabase } from '@/lib/supabase';
+import { v4 as uuidv4 } from 'uuid';
 
 const SYSTEM_PROMPT = `You are Swaggy — a friendly conversational food ordering assistant powered by Swiggy. Help users order food through natural conversation.
 
@@ -45,8 +48,7 @@ Shall I place this order? 👇"
 - For errors, be helpful and suggest alternatives`;
 
 export async function POST(request: NextRequest) {
-  let mcpClient: Awaited<ReturnType<typeof createSwiggyFoodMcpClient>> | null =
-    null;
+  let mcpClient: Awaited<ReturnType<typeof createSwiggyFoodMcpClient>> | null = null;
 
   try {
     // Check auth
@@ -56,7 +58,61 @@ export async function POST(request: NextRequest) {
     }
 
     const accessToken = session.swiggy!.accessToken;
-    const { messages } = await request.json();
+    const userId = session.userId;
+    
+    const { messages, chatId: clientChatId } = await request.json();
+    
+    // Ensure chatId exists
+    const chatId = clientChatId || uuidv4();
+    
+    let userPreferences = '';
+    
+    if (userId) {
+      // Ensure the user exists in the database before adding chats (due to foreign key constraints)
+      const { error: userError } = await supabase.from('users').upsert({ 
+        id: userId,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id', ignoreDuplicates: false });
+      
+      if (userError) console.error('Failed to upsert user:', userError);
+
+      const isNewChat = messages.length === 1;
+      const title = isNewChat ? messages[0].content.slice(0, 50) + (messages[0].content.length > 50 ? '...' : '') : undefined;
+      
+      const chatPayload: Record<string, unknown> = {
+        id: chatId,
+        user_id: userId,
+        updated_at: new Date().toISOString()
+      };
+      
+      if (isNewChat && title) {
+        chatPayload.title = title;
+      }
+
+      // Upsert the chat session
+      await supabase.from('chats').upsert(chatPayload, { onConflict: 'id' });
+      
+      // Save the latest incoming user message
+      const latestMessage = messages[messages.length - 1];
+      if (latestMessage && latestMessage.role === 'user') {
+        await supabase.from('messages').insert({
+          id: latestMessage.id || uuidv4(),
+          chat_id: chatId,
+          role: 'user',
+          content: latestMessage.content
+        });
+      }
+
+      // Fetch user preferences
+      const { data: userData } = await supabase.from('users').select('preferences').eq('id', userId).single();
+      if (userData?.preferences) {
+        userPreferences = userData.preferences;
+      }
+    }
+
+    const dynamicSystemPrompt = userPreferences
+      ? `${SYSTEM_PROMPT}\n\n## User Preferences (REMEMBER THIS):\n${userPreferences}`
+      : SYSTEM_PROMPT;
 
     // Create OpenRouter-compatible client via OpenAI provider
     const openrouter = createOpenAI({
@@ -67,24 +123,65 @@ export async function POST(request: NextRequest) {
     // Swiggy MCP is Streamable HTTP — legacy SSE GET gets 405
     mcpClient = await createSwiggyFoodMcpClient(accessToken);
     const mcpTools = await mcpClient.tools();
+    
+    // Combine Swiggy MCP tools with our custom memory tool
+    const allTools = {
+      ...mcpTools,
+      remember_preferences: tool({
+        description: 'Call this tool when the user explicitly mentions a long-term food preference, allergy, dietary restriction, or favorite that you should remember for future conversations.',
+        parameters: z.object({
+          preference: z.string().describe('The preference to remember (e.g. "I am vegetarian", "I am allergic to peanuts", "I prefer spicy food")')
+        }),
+        execute: async ({ preference }) => {
+          if (!userId) return "Cannot save preference: user not logged in.";
+          
+          const { data } = await supabase.from('users').select('preferences').eq('id', userId).single();
+          const currentPrefs = data?.preferences || '';
+          const newPrefs = currentPrefs ? `${currentPrefs}\n- ${preference}` : `- ${preference}`;
+          
+          await supabase.from('users').upsert({
+            id: userId,
+            preferences: newPrefs,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+          
+          return `Successfully remembered: ${preference}`;
+        }
+      })
+    };
 
     // Stream response with Swiggy MCP tools
     const result = await streamText({
-      model: openrouter('nvidia/nemotron-3-ultra-550b-a55b:free'),
-      system: SYSTEM_PROMPT,
+      model: openrouter('openrouter/free'),
+      system: dynamicSystemPrompt,
       messages,
-      tools: mcpTools,
+      tools: allTools,
       maxSteps: 10,
-      onFinish: async () => {
+      onError: ({ error }) => {
+        console.error('🔥 StreamText Error:', error);
+      },
+      onFinish: async (completion) => {
         if (mcpClient) {
           try { await mcpClient.close(); } catch { /* ignore */ }
+        }
+        
+        // Save the assistant's response to Supabase
+        if (userId && completion.text) {
+          const { error: assistantMsgError } = await supabase.from('messages').insert({
+            id: uuidv4(),
+            chat_id: chatId,
+            role: 'assistant',
+            content: completion.text,
+            tool_invocations: completion.toolCalls
+          });
+          if (assistantMsgError) console.error('Error saving assistant message:', assistantMsgError);
         }
       },
     });
 
     return result.toDataStreamResponse();
   } catch (error) {
-    console.error('Chat error:', error);
+    console.error('🔥 Chat Route Error:', error);
     if (mcpClient) {
       try { await mcpClient.close(); } catch { /* ignore */ }
     }
@@ -99,7 +196,7 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json(
-      { error: 'Something went wrong. Please try again.' },
+      { error: message },
       { status: 500 }
     );
   }
